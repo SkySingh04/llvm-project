@@ -107,12 +107,19 @@ STATISTIC(FinalNumBasicBlocks,  "f. Final number of basic blocks in this module"
 
 // Options for the pass
 const int defaultObfRate = 30, defaultObfTime = 1;
+const int binarySafeObfRate = 10, binarySafeObfTime = 1;
 
 static cl::opt<int>
 ObfProbRate("bcf_prob", cl::desc("Choose the probability [%] each basic blocks will be obfuscated by the -bcf pass"), cl::value_desc("probability rate"), cl::init(defaultObfRate), cl::Optional);
 
 static cl::opt<int>
 ObfTimes("bcf_loop", cl::desc("Choose how many time the -bcf pass loop on a function"), cl::value_desc("number of times"), cl::init(defaultObfTime), cl::Optional);
+
+// Binary-safe mode for McSema-lifted IR compatibility
+static cl::opt<bool>
+BinarySafeMode("bcf_binary_safe",
+    cl::desc("Enable binary-safe mode for McSema-lifted IR (reduces aggressiveness, skips sub_* functions)"),
+    cl::init(false), cl::Optional);
 
 namespace {
   struct BogusControlFlow : public FunctionPass {
@@ -121,23 +128,51 @@ namespace {
     BogusControlFlow() : FunctionPass(ID) {}
     BogusControlFlow(bool flag) : FunctionPass(ID) {this->flag = flag; BogusControlFlow();}
 
+    // Helper: Check if this is a McSema-generated function (sub_*)
+    bool isMcSemaFunction(Function *F) {
+      StringRef Name = F->getName();
+      // McSema generates functions like sub_140001000, sub_*, etc.
+      return Name.starts_with("sub_") ||
+             Name.starts_with("callback_") ||
+             Name.starts_with("data_") ||
+             Name.starts_with("ext_");
+    }
+
     /* runOnFunction
      *
      * Overwrite FunctionPass method to apply the transformation
      * to the function. See header for more details.
      */
     bool runOnFunction(Function &F) override {
+      // Binary-safe mode: Skip McSema-generated functions entirely
+      if (BinarySafeMode && isMcSemaFunction(&F)) {
+        DEBUG_WITH_TYPE("opt", errs() << "bcf: Skipping McSema function in binary-safe mode: "
+            << F.getName() << "\n");
+        return false;
+      }
+
+      // Get effective parameters (binary-safe mode uses reduced values)
+      int effectiveObfRate = BinarySafeMode ? binarySafeObfRate : ObfProbRate;
+      int effectiveObfTimes = BinarySafeMode ? binarySafeObfTime : ObfTimes;
+
       // Check if the percentage is correct
-      if (ObfTimes <= 0) {
+      if (effectiveObfTimes <= 0) {
         errs()<<"BogusControlFlow application number -bcf_loop=x must be x > 0";
 		return false;
       }
 
       // Check if the number of applications is correct
-      if ( !((ObfProbRate > 0) && (ObfProbRate <= 100)) ) {
+      if ( !((effectiveObfRate > 0) && (effectiveObfRate <= 100)) ) {
         errs()<<"BogusControlFlow application basic blocks percentage -bcf_prob=x must be 0 < x <= 100";
 		return false;
       }
+
+      // Override global values for this run if in binary-safe mode
+      if (BinarySafeMode) {
+        ObfProbRate = effectiveObfRate;
+        ObfTimes = effectiveObfTimes;
+      }
+
       // If fla annotations
       if(toObfuscate(flag,&F,"bcf")) {
         bogus(F);

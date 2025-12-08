@@ -13,6 +13,11 @@
 #include "llvm/Transforms/Obfuscation/Split.h"
 #include "llvm/Transforms/Obfuscation/Substitution.h"
 #include "llvm/Transforms/Obfuscation/LinearMBA.h"
+#include "llvm/Transforms/Obfuscation/ConstantObfuscation.h"
+#include "llvm/Transforms/Obfuscation/NopInsertion.h"
+#include "llvm/Transforms/Obfuscation/BlockReordering.h"
+#include "llvm/Transforms/Obfuscation/IndirectCall.h"
+#include "llvm/Transforms/Obfuscation/IndirectBranch.h"
 
 // Forward declare to avoid including heavy BogusControlFlow.h
 namespace llvm {
@@ -68,6 +73,61 @@ struct BogusControlFlowPassWrapper : public PassInfoMixin<BogusControlFlowPassWr
   static bool isRequired() { return true; }
 };
 
+struct ConstantObfuscationPassWrapper : public PassInfoMixin<ConstantObfuscationPassWrapper> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
+    Pass *LegacyPass = createConstantObfuscation(true);
+    FunctionPass *FP = static_cast<FunctionPass*>(LegacyPass);
+    bool Changed = FP->runOnFunction(F);
+    delete LegacyPass;
+    return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
+  }
+  static bool isRequired() { return true; }
+};
+
+struct NopInsertionPassWrapper : public PassInfoMixin<NopInsertionPassWrapper> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
+    Pass *LegacyPass = createNopInsertion(true);
+    FunctionPass *FP = static_cast<FunctionPass*>(LegacyPass);
+    bool Changed = FP->runOnFunction(F);
+    delete LegacyPass;
+    return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
+  }
+  static bool isRequired() { return true; }
+};
+
+struct BlockReorderingPassWrapper : public PassInfoMixin<BlockReorderingPassWrapper> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
+    Pass *LegacyPass = createBlockReordering(true);
+    FunctionPass *FP = static_cast<FunctionPass*>(LegacyPass);
+    bool Changed = FP->runOnFunction(F);
+    delete LegacyPass;
+    return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
+  }
+  static bool isRequired() { return true; }
+};
+
+struct IndirectCallPassWrapper : public PassInfoMixin<IndirectCallPassWrapper> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
+    Pass *LegacyPass = createIndirectCall(true);
+    FunctionPass *FP = static_cast<FunctionPass*>(LegacyPass);
+    bool Changed = FP->runOnFunction(F);
+    delete LegacyPass;
+    return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
+  }
+  static bool isRequired() { return true; }
+};
+
+struct IndirectBranchPassWrapper : public PassInfoMixin<IndirectBranchPassWrapper> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
+    Pass *LegacyPass = createIndirectBranch(true);
+    FunctionPass *FP = static_cast<FunctionPass*>(LegacyPass);
+    bool Changed = FP->runOnFunction(F);
+    delete LegacyPass;
+    return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
+  }
+  static bool isRequired() { return true; }
+};
+
 } // end anonymous namespace
 
 // Plugin registration for opt
@@ -97,6 +157,26 @@ llvmGetPassPluginInfo() {
           }
           if (Name == "linear-mba") {
             FPM.addPass(LinearMBAPass(1, 0xC0FFEE));
+            return true;
+          }
+          if (Name == "constant-obfuscate") {
+            FPM.addPass(ConstantObfuscationPassWrapper());
+            return true;
+          }
+          if (Name == "nop-insertion") {
+            FPM.addPass(NopInsertionPassWrapper());
+            return true;
+          }
+          if (Name == "block-reordering") {
+            FPM.addPass(BlockReorderingPassWrapper());
+            return true;
+          }
+          if (Name == "indirect-call") {
+            FPM.addPass(IndirectCallPassWrapper());
+            return true;
+          }
+          if (Name == "indirect-branch") {
+            FPM.addPass(IndirectBranchPassWrapper());
             return true;
           }
           return false;

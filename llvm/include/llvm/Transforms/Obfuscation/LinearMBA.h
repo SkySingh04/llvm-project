@@ -19,8 +19,20 @@ namespace llvm {
 struct LinearMBAPass : public PassInfoMixin<LinearMBAPass> {
   unsigned Cycles;
   uint64_t Seed;
+  bool BinarySafe;  // Binary-safe mode for McSema-lifted IR
 
-  LinearMBAPass(unsigned Cycles = 1, uint64_t Seed = 0xC0FFEE);
+  LinearMBAPass(unsigned Cycles = 1, uint64_t Seed = 0xC0FFEE, bool BinarySafe = false);
+
+  // Helper: Check if this is a McSema-generated function
+  bool isMcSemaFunction(Function *F) {
+    StringRef Name = F->getName();
+    return Name.starts_with("sub_") ||
+           Name.starts_with("callback_") ||
+           Name.starts_with("data_") ||
+           Name.starts_with("ext_") ||
+           Name.starts_with("__mcsema") ||
+           Name.starts_with("__remill");
+  }
 
   Value* replaceBitwiseWithMBA(BinaryOperator *BO, unsigned bitWidth,
                                 IRBuilder<> &B, std::mt19937_64 &R);

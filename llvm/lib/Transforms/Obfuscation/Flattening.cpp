@@ -32,6 +32,18 @@ using namespace llvm;
 // Stats
 STATISTIC(Flattened, "Functions flattened");
 
+// Binary-safe mode for McSema-lifted IR compatibility
+static cl::opt<bool>
+BinarySafeMode("fla_binary_safe",
+    cl::desc("Enable binary-safe mode for McSema-lifted IR (skips sub_* functions, reduces complexity)"),
+    cl::init(false), cl::Optional);
+
+// Maximum number of basic blocks to flatten in binary-safe mode
+static cl::opt<int>
+MaxBBsInBinarySafe("fla_max_bbs",
+    cl::desc("Maximum basic blocks to flatten per function in binary-safe mode"),
+    cl::value_desc("max blocks"), cl::init(50), cl::Optional);
+
 namespace {
 struct Flattening : public FunctionPass {
   static char ID;  // Pass identification, replacement for typeid
@@ -39,6 +51,18 @@ struct Flattening : public FunctionPass {
 
   Flattening() : FunctionPass(ID) {}
   Flattening(bool flag) : FunctionPass(ID) { this->flag = flag; }
+
+  // Helper: Check if this is a McSema-generated function (sub_*)
+  bool isMcSemaFunction(Function *F) {
+    StringRef Name = F->getName();
+    // McSema generates functions like sub_140001000, sub_*, callback_*, etc.
+    return Name.starts_with("sub_") ||
+           Name.starts_with("callback_") ||
+           Name.starts_with("data_") ||
+           Name.starts_with("ext_") ||
+           Name.starts_with("__mcsema") ||
+           Name.starts_with("__remill");
+  }
 
   bool runOnFunction(Function &F) override;
   bool flatten(Function *f);
@@ -51,6 +75,31 @@ Pass *llvm::createFlattening(bool flag) { return new Flattening(flag); }
 
 bool Flattening::runOnFunction(Function &F) {
   Function *tmp = &F;
+
+  // Binary-safe mode: Skip McSema-generated functions entirely
+  // These functions are lifted from binary and modifying their CFG
+  // can corrupt the state machine architecture
+  if (BinarySafeMode && isMcSemaFunction(tmp)) {
+    DEBUG_WITH_TYPE("opt", errs() << "fla: Skipping McSema function in binary-safe mode: "
+        << F.getName() << "\n");
+    return false;
+  }
+
+  // Binary-safe mode: Skip functions with too many basic blocks
+  // Large functions are more likely to have complex state machine logic
+  if (BinarySafeMode) {
+    size_t bbCount = 0;
+    for (auto &BB : F) {
+      (void)BB;
+      bbCount++;
+    }
+    if (bbCount > (size_t)MaxBBsInBinarySafe) {
+      DEBUG_WITH_TYPE("opt", errs() << "fla: Skipping large function in binary-safe mode: "
+          << F.getName() << " (BBs: " << bbCount << ")\n");
+      return false;
+    }
+  }
+
   // Do we obfuscate
   if (toObfuscate(flag, tmp, "fla")) {
     if (flatten(tmp)) {

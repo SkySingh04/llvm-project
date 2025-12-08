@@ -23,11 +23,19 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/CommandLine.h"
 #include <random>
 
 using namespace llvm;
 
-LinearMBAPass::LinearMBAPass(unsigned Cycles, uint64_t Seed) : Cycles(Cycles), Seed(Seed) {}
+// Command-line option for binary-safe mode
+static cl::opt<bool>
+MBABinarySafeMode("mba_binary_safe",
+    cl::desc("Enable binary-safe mode for McSema-lifted IR (skips sub_* functions)"),
+    cl::init(false), cl::Optional);
+
+LinearMBAPass::LinearMBAPass(unsigned Cycles, uint64_t Seed, bool BinarySafe)
+    : Cycles(Cycles), Seed(Seed), BinarySafe(BinarySafe || MBABinarySafeMode) {}
 
 // Replace a single binary op with a per-bit reconstruction
 Value* LinearMBAPass::replaceBitwiseWithMBA(BinaryOperator *BO, unsigned bitWidth, IRBuilder<> &B, std::mt19937_64 &R) {
@@ -94,6 +102,11 @@ Value* LinearMBAPass::replaceBitwiseWithMBA(BinaryOperator *BO, unsigned bitWidt
   }
 
 PreservedAnalyses LinearMBAPass::run(Function &F, FunctionAnalysisManager &AM) {
+    // Binary-safe mode: Skip McSema-generated functions entirely
+    if ((BinarySafe || MBABinarySafeMode) && isMcSemaFunction(&F)) {
+      return PreservedAnalyses::all();
+    }
+
     // Use str() to get hash for StringRef
     std::mt19937_64 rng(Seed ^ std::hash<std::string>{}(F.getName().str()));
     bool changed = false;

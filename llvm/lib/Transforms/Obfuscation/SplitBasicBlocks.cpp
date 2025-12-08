@@ -27,6 +27,15 @@ STATISTIC(Split, "Basicblock splitted");
 static cl::opt<int> SplitNum("split_num", cl::init(2),
                              cl::desc("Split <split_num> time each BB"));
 
+// Binary-safe mode for McSema-lifted IR compatibility
+static cl::opt<bool>
+BinarySafeMode("split_binary_safe",
+    cl::desc("Enable binary-safe mode for McSema-lifted IR (minimal splits, skips sub_* functions)"),
+    cl::init(false), cl::Optional);
+
+// Reduced split count for binary-safe mode
+const int binarySafeSplitNum = 1;
+
 namespace {
 struct SplitBasicBlock : public FunctionPass {
   static char ID; // Pass identification, replacement for typeid
@@ -34,8 +43,39 @@ struct SplitBasicBlock : public FunctionPass {
 
   SplitBasicBlock() : FunctionPass(ID) {}
   SplitBasicBlock(bool flag) : FunctionPass(ID) {
-    
+
     this->flag = flag;
+  }
+
+  // Helper: Check if this is a McSema-generated function (sub_*)
+  bool isMcSemaFunction(Function *F) {
+    StringRef Name = F->getName();
+    // McSema generates functions like sub_140001000, sub_*, callback_*, etc.
+    return Name.starts_with("sub_") ||
+           Name.starts_with("callback_") ||
+           Name.starts_with("data_") ||
+           Name.starts_with("ext_") ||
+           Name.starts_with("__mcsema") ||
+           Name.starts_with("__remill");
+  }
+
+  // Helper: Check if block contains state machine patterns (common in lifted IR)
+  bool containsStateMachinePattern(BasicBlock *b) {
+    for (BasicBlock::iterator I = b->begin(), IE = b->end(); I != IE; ++I) {
+      // Look for patterns that indicate McSema state machine:
+      // - Stores to PC-like variables
+      // - Loads from state structures
+      if (StoreInst *SI = dyn_cast<StoreInst>(&*I)) {
+        Value *Ptr = SI->getPointerOperand();
+        if (Ptr->getName().contains("PC") ||
+            Ptr->getName().contains("STATE") ||
+            Ptr->getName().contains("rip") ||
+            Ptr->getName().contains("eip")) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   bool runOnFunction(Function &F) override;
@@ -55,14 +95,29 @@ Pass *llvm::createSplitBasicBlock(bool flag) {
 }
 
 bool SplitBasicBlock::runOnFunction(Function &F) {
-  // Check if the number of applications is correct
-  if (!((SplitNum > 1) && (SplitNum <= 10))) {
-    errs()<<"Split application basic block percentage\
-            -split_num=x must be 1 < x <= 10";
+  Function *tmp = &F;
+
+  // Binary-safe mode: Skip McSema-generated functions entirely
+  if (BinarySafeMode && isMcSemaFunction(tmp)) {
+    DEBUG_WITH_TYPE("split", errs() << "split: Skipping McSema function in binary-safe mode: "
+        << F.getName() << "\n");
     return false;
   }
 
-  Function *tmp = &F;
+  // Get effective split count (binary-safe mode uses reduced value)
+  int effectiveSplitNum = BinarySafeMode ? binarySafeSplitNum : SplitNum;
+
+  // Check if the number of applications is correct
+  if (!((effectiveSplitNum >= 1) && (effectiveSplitNum <= 10))) {
+    errs()<<"Split application basic block percentage\
+            -split_num=x must be 1 <= x <= 10";
+    return false;
+  }
+
+  // Override global value if in binary-safe mode
+  if (BinarySafeMode) {
+    SplitNum = effectiveSplitNum;
+  }
 
   // Do we obfuscate
   if (toObfuscate(flag, tmp, "split")) {
@@ -105,7 +160,15 @@ void SplitBasicBlock::split(Function *f) {
     // ===== EXCEPTION HANDLING: Skip blocks with exception-related instructions =====
     // We need to be careful not to split in the middle of exception handling code
     if (containsExceptionHandling(curr)) {
-      DEBUG_WITH_TYPE("split", errs() << "split: Skipping block with exception handling: " 
+      DEBUG_WITH_TYPE("split", errs() << "split: Skipping block with exception handling: "
+          << curr->getName() << "\n");
+      continue;
+    }
+
+    // ===== BINARY-SAFE MODE: Skip blocks with state machine patterns =====
+    // These blocks are critical for McSema-lifted code execution
+    if (BinarySafeMode && containsStateMachinePattern(curr)) {
+      DEBUG_WITH_TYPE("split", errs() << "split: Skipping state machine block in binary-safe mode: "
           << curr->getName() << "\n");
       continue;
     }

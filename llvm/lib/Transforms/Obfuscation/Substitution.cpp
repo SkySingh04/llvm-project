@@ -33,6 +33,12 @@ ObfTimes("sub_loop",
          cl::desc("Choose how many time the -sub pass loops on a function"),
          cl::value_desc("number of times"), cl::init(1), cl::Optional);
 
+// Binary-safe mode for McSema-lifted IR compatibility
+static cl::opt<bool>
+BinarySafeMode("sub_binary_safe",
+    cl::desc("Enable binary-safe mode for McSema-lifted IR (skips sub_* functions)"),
+    cl::init(false), cl::Optional);
+
 
 // Stats
 STATISTIC(Add, "Add substitued");
@@ -99,6 +105,18 @@ struct Substitution : public FunctionPass {
 
   void xorSubstitution(BinaryOperator *bo);
   void xorSubstitutionRand(BinaryOperator *bo);
+
+  // Helper: Check if this is a McSema-generated function (sub_*)
+  bool isMcSemaFunction(Function *F) {
+    StringRef Name = F->getName();
+    // McSema generates functions like sub_140001000, sub_*, callback_*, etc.
+    return Name.starts_with("sub_") ||
+           Name.starts_with("callback_") ||
+           Name.starts_with("data_") ||
+           Name.starts_with("ext_") ||
+           Name.starts_with("__mcsema") ||
+           Name.starts_with("__remill");
+  }
 };
 }
 
@@ -107,17 +125,26 @@ static RegisterPass<Substitution> X("substitution", "operators substitution");
 Pass *llvm::createSubstitution(bool flag) { return new Substitution(flag); }
 
 bool Substitution::runOnFunction(Function &F) {
-   // Check if the percentage is correct
-   if (ObfTimes <= 0) {
-     errs()<<"Substitution application number -sub_loop=x must be x > 0";
-	 return false;
-   }
-
   Function *tmp = &F;
+
+  // Binary-safe mode: Skip McSema-generated functions entirely
+  // Note: Substitution is generally safe, but we still skip for consistency
+  if (BinarySafeMode && isMcSemaFunction(tmp)) {
+    DEBUG_WITH_TYPE("sub", errs() << "sub: Skipping McSema function in binary-safe mode: "
+        << F.getName() << "\n");
+    return false;
+  }
+
+  // Check if the percentage is correct
+  if (ObfTimes <= 0) {
+    errs()<<"Substitution application number -sub_loop=x must be x > 0";
+    return false;
+  }
+
   // Do we obfuscate
   if (toObfuscate(flag, tmp, "sub")) {
     substitute(tmp);
-	return true;
+    return true;
   }
 
   return false;

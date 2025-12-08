@@ -1,8 +1,13 @@
 add_llvm_component_library(LLVMObfuscation
+  BlockReordering.cpp
   BogusControlFlow.cpp
+  ConstantObfuscation.cpp
   CryptoUtils.cpp
   Flattening.cpp
+  IndirectBranch.cpp
+  IndirectCall.cpp
   LinearMBA.cpp
+  NopInsertion.cpp
   SplitBasicBlocks.cpp
   Substitution.cpp
   Utils.cpp
